@@ -1,0 +1,298 @@
+$NOMOD51
+;****************************************************************************
+;Group: 5
+;Thomas, Brandi, Leonel
+;==========================================================================
+
+public   ADCStart
+public   ClearScreen
+public   Delay
+$NOLIST
+
+$include (c8051f340.inc)                  ; Include register definition file.
+
+$LIST
+;****************************************************************************
+LCD_SWITCH1   equ    P1.4
+LCD_SWITCH2   equ    P2.7
+;****************************************************************************
+
+;      cseg   at 0
+;      ljmp   Main 
+
+;****************************************************************************
+
+
+
+;Main:            	
+
+	;		anl   PCA0MD, #NOT(040h)      ; clear Watchdog Enable bit
+
+            						; Enable the Port I/O Crossbar
+
+ 		;	 mov   XBR0, #01h 
+ ;    mov   XBR1, #40h            ; enable Crossbar
+ 	;		 mov   P1MDOUT, #00h   	
+   ;	mov   P1MDIN, #11101111B
+ ;		mov   P1SKIP, #00010000B    	 
+;    	mov   P3MDOUT, #0fh   	; Sets ports to digital, open-drain
+     ;mov   P3MDIN, #0ffh 
+	;     	
+ ;    mov   P2MDIN, #0ffh
+;			mov   P2MDOUT, #00h
+;			mov   P2SKIP, #00000010B 
+;			mov   P4MDOUT, #00
+;	  	mov   CKCON, #08h          ;
+;			mov   SCON0, #00010000B 
+;			anl   PCON, #0111111B   ; clear smod for baud rate
+;			mov   TMOD, #00100000B
+;			mov   TH1, #0B2H
+;			mov   TL1, #0B2H     ;253-old
+;			setb  TR1
+			
+ADC      segment  CODE
+            rseg  ADC
+							
+ADCStart:					 
+		 	 clr   F0
+			clr   F1
+			mov   R0, #00H
+			mov   R1, #00H
+			mov   R2, #0FH
+		 ;mov   IE, #10010000B
+		 	call  Delay 
+      
+      	   
+		 	call  ClearScreen     ;clear screen after reset
+      clr   A
+;			jmp   ADCStart
+
+;********************************************************************************
+      
+;FirstScreen:           ; sets the welcome screen
+;			mov   A, R0
+;			mov   DPTR, #Table
+;			movc  A, @A+DPTR
+;			cjne  A, #'%', skip1
+;      			jmp   skip2
+;skip1:
+;			mov   SBUF0, A
+;			jnb   TI0, $
+;			clr   TI0
+;			inc   R0 
+			;inc   R1
+
+ ;	jmp   FirstScreen
+;skip2:
+
+
+ ;  mov   A, #'0'
+;	  mov   R4, #16H
+;Hold:
+ ;call  Delay	      ; holds intro screen for 5 seconds
+; djnz  R4, Hold	
+;				
+; call  ClearScreen
+
+
+
+			call  ADC0_Init
+			call  Delay
+			mov R0, #00
+
+TempScreen:
+			mov A, R0
+			jb  LCD_SWITCH2, WaterScreen
+			mov DPTR, #Table3
+			jnb LCD_SWITCH2, OilScreen
+WaterScreen:
+      mov DPTR, #Table2
+OilScreen:
+			movc A, @A+DPTR
+			cjne A, #'%', skip3
+			jmp  skip4
+skip3:
+      			mov SBUF0, A
+			jnb  TI0, $
+			clr TI0
+			inc R0
+			jmp TempScreen
+skip4:
+    	mov  A, #00		
+     	call Measure_Temp
+			mov A, DPH
+			mov R3, A
+			clr C
+		;	subb A, #50       ; adjust for offset
+		  mov DPTR, #Table4
+			clr C
+			;mov , DPL
+			add A, DPL    ;add the AD0 to Table the 1st time out of 3
+			mov DPL, A
+			mov A, R3
+			jnc addAgain1
+			inc DPH
+			clr C
+addAgain1:
+     	add A, DPL    ;add the 2nd time out of 3
+			mov DPL, A
+			mov A, R3
+			jnc addAgain2
+			inc DPH
+			clr C
+addAgain2:
+      mov R1, A					
+			movc A, @A+DPTR    ;add for the third time
+			mov SBUF0, A
+			jnb TI0, $
+			clr TI0
+			inc R1
+			mov A, R1			
+			movc A, @A+DPTR
+			mov SBUF0, A
+			jnb TI0, $
+			clr TI0
+			inc R1
+			mov A, R1
+			movc A, @A+DPTR
+			mov SBUF0, A
+			jnb TI0, $
+			clr TI0
+			mov A, #11011111B ;Degree symbol
+			mov SBUF0, A
+			jnb TI0, $
+			clr TI0
+			mov A, #'F'
+			mov SBUF0, A
+			jnb TI0, $
+			clr TI0
+     	mov R1, #00
+			mov R4, #10H
+;Hold2:
+;			call Delay
+;			djnz  R4, Hold2
+			mov R0, #00
+
+      ret
+;			jmp TempScreen
+;**********************************************************************************
+
+ADC0_Init:
+            mov  ADC0CN, #80H         ; conversion initiated on every
+						mov  AMX0P,  #00H
+            jb   LCD_SWITCH2, ShowWater						
+            mov  AMX0P,  #01H         ; select P2.1 as input
+ShowWater:
+            mov  AMX0N,  #00011111B   ; select ground (single-ended mode)
+            mov  ADC0CF, #00001100B   ; 00001000B
+                                      ;     1>sets ADC conversion clk (750kHz)
+                                      ;      0> ADC0H:ADC0L is right justified
+                                      ;					
+            mov  REF0CN, #00000011B   ;	00000111B
+                                      ;     0>    Vref used as voltage ref
+                                      ;      1>   internal temp sensor on
+                                      ;       1>  internal bias gen on
+                                      ;        1> internal reference
+                                      ;            buffer enabled
+            anl EIE1, #0F7H           ; disable ADC0 conversion
+                                      ; complete interrupt
+            ret     
+
+
+;********************************************************************************
+Measure_Temp:
+            
+            clr  AD0INT               ; clears conversion completion flag
+            setb AD0BUSY              ; initiates AD0 conversion
+            jnb  AD0INT,$             ; waits for conversion to complete
+            mov  DPL,ADC0L            ; stores temperature (word) in
+            mov  DPH,ADC0H            ;  DPTR
+            ret
+
+      
+
+
+;********************************************************************************
+;Line 2 Subroutine: sets the LCD to the second line and sets the F1 flag to let
+;the program know its on the second line now.
+;Inputs:None
+;Outputs: F1, R1
+;==============================================================================
+;Line2:
+;			setb  F1
+;			mov   SBUF0, #0FEH
+;			jnb   TI0, $
+;			clr   TI0
+;			mov   SBUF0, #45H
+;			jnb   TI0, $
+;			clr   TI0
+;			mov   SBUF0, #40H
+;			jnb   TI0, $
+;			clr   TI0
+;			mov   R1, #00
+	;		ret
+;;********************************************************************************
+;Line 1 Subroutine: sets the LCD back to the first line and clears F1 to let 
+;program know the lcd is on the first line
+;Inputs:none
+;Outputs: F1, R1
+;===============================================================================
+;Line1:
+ ;     clr   F1
+	;		call ClearScreen
+	;		mov   R1, #00
+	;		ret    
+;******************************************************************************
+;subroutine: Clear Screen
+; sends serial code to LCD with built in commands to clear the screen and 
+;move courser back to starting point.
+;input: none
+;output:none
+;==============================================================================
+
+ClearScreen:
+      clr   TI0
+	    mov   SBUF0, #0FEH
+			jnb   TI0, $
+			clr   TI0
+			mov   SBUF0, #51H
+			jnb   TI0, $
+			clr   TI0
+			ret
+;*******************************************************************************
+Delay:       			          ;holds welcome and other screens
+Wait1:                    ;for 5 seconds
+      mov   R6, #00h
+Wait0:
+      mov   R5, #00h
+      djnz  R5, $
+      djnz  R6, Wait0
+      
+
+			ret
+
+;===============================================================================
+
+      ;cseg   at   100H
+Table: 
+       db ' Group 5  ADC', 0FEH, 45H, 40H, 'Digital3 Fall 13%'
+
+Table2: 
+       db  'H20 Temp: %'
+
+Table3: 
+	    db  'Oil Temp: %'
+Table4:
+      db ' 32',' 33',' 33',' 34',' 35',' 36',' 36',' 37',' 38',' 38',' 39',' 40',' 40',' 41',' 42',' 43',' 43',' 44',' 45',' 45',' 46',' 47',' 47',' 48'
+      db ' 49',' 50',' 50',' 51',' 52',' 52',' 53',' 54',' 55',' 55',' 56',' 57',' 57',' 58',' 59',' 59',' 60',' 61',' 62',' 62',' 63',' 64',' 64',' 65'
+      db ' 66',' 66',' 67',' 68',' 69',' 69',' 70',' 71',' 71',' 72',' 73',' 73',' 74',' 75',' 76',' 76',' 77',' 78',' 78',' 79',' 80',' 81',' 81',' 82'
+      db ' 83',' 83',' 84',' 85',' 85',' 86',' 87',' 88',' 88',' 89',' 90',' 90',' 91',' 92',' 92',' 93',' 94',' 95',' 95',' 96',' 97',' 97',' 98',' 99'
+      db '100','100','101','102','102','103','104','104','105','106','107','107','108','109','109','110','111','111','112','113','114','114','115','116'
+      db '116','117','118','118','119','120','121','121','122','123','123','124','125','126','126','127','128','128','129','130','130','131','132','133'
+      db '133','134','135','135','136','137','137','138','139','140','140','141','142','142','143','144','145','145','146','147','147','148','149','149'
+      db '150','151','152','152','153','154','154','155','156','156','157','158','159','159','160','161','161','162','163','163','164','165','166','166'
+      db '167','168','168','169','170','171','171','172','173','173','174','175','175','176','177','178','178','179','180','180','181','182','182','183'
+      db '184','185','185','186','187','187','188','189','190','190','191','192','192','193','194','194','195','196','197','197','198','199','199','200'
+      db '201','201','202','203','204','204','205','206','206','207','208','208','209','210','211','211'
+
+      end
