@@ -1,0 +1,390 @@
+$NOMOD51
+;****************************************************************************
+;Group: 5
+;Thomas, Brandi, Leonel
+;Keypad Milestone
+;Discription: This code demonstrates how the Keypad scans the rows and colums
+;to check for a keyto be pressed. Then uses the serial LCD to display the Charactor
+;==========================================================================
+extrn  CODE  (ADCStart, ClearScreen, Delay)
+extrn  CODE  (LogIn)
+
+$NOLIST
+
+$include (c8051f340.inc)                  ; Include register definition file.
+
+$LIST
+;*****************************************************************************
+
+
+TICKS            equ 40H
+SECONDS          equ 41H      ; ram loactions to save timer inf
+MINUTES          equ 42H
+HOURS            equ 43H
+
+DRIVER_1         equ 20h.0
+DRIVER_2         equ 20h.1     ;bitlocations for which driver loged in
+DRIVER_3         equ 20h.2
+
+ONE          equ   1001111b
+TWO          equ   0010010b
+THREE        equ   0000110b
+FOUR         equ   1001100b
+FIVE         equ   0100100b
+SIX          equ   0100000b   ;seven segment values for gear indicator
+SEVEN        equ   0001111b
+EIGHT        equ   0000000b
+NINE         equ   0000100b
+ZERO         equ   0000001b
+NEUTRAL      equ   1101010b
+REVERSE      equ   1111010b
+NULL         equ   1111110b
+
+GEAR          equ  59H         ;ram location for current gear 
+UPSHIFT       equ  P1.0
+DOWNSHIFT     equ  P1.1        ;locatins for input switches
+LCD_SWITCH1   equ    P1.4
+
+;****************************************************************************
+
+    cseg   at 0           ;reset vector
+    ljmp   Main1         ; jump to main vector
+		cseg   at 03H          ;external interupt vector 
+		ljmp   GearChangeISR   ;
+		cseg   at 2Bh          ;timer 2 interupt
+		ljmp   RunhoursISR
+
+
+
+
+
+
+
+
+
+
+;****************************************************************************
+Main      segment  CODE
+            rseg  Main
+
+Main1:            	
+
+      anl   PCA0MD, #NOT(040h)      ; clear Watchdog Enable bit
+
+            	; Enable the Port I/O Crossbar
+
+      mov   XBR0, #01h 
+			mov   XBR1, #40h            ; enable Crossbar
+			mov   P0MDIN, #0FFH
+			mov   P0MDOUT, #00H         ; port 0 set to digital in open drain
+			setb  P0.5                   ;  external interupt pin set
+			mov   P0SKIP, #00100000B      ; then skiped. datasheet told me to
+      mov   P1MDOUT, #00h   	     ;port 1 digital operdrain
+      mov   P1MDIN, #0ffh 
+			mov   P1SKIP, #00110000B   	 ; skip the two analog inputs 
+			mov   P3MDOUT, #0fh   	; Sets port 3 to digital, and half open-drain half push-pull
+      mov   P3MDIN, #0ffh    
+	    mov   P2MDOUT, #00h   	  
+      mov   P2MDIN, #0ffh     ; port two digital open drain
+			mov   P2SKIP, #00000010B
+			mov   P4MDIN, #0FFH        ;port 4 digital opendrain
+			mov   P4MDOUT, #00
+		  mov   CKCON, #08h          ;sets clock to system clock
+			mov   SCON0, #00010000B    
+			anl   PCON, #0111111B   ; clear smod for baud rate
+			mov   TMOD, #00100000B    
+			mov   TH1, #0B2H
+			mov   TL1, #0B2H     ;sets timer 1 baud rate to 9600
+			setb  TR1            ;turns on timer 1
+			setb  ET2       ;enables timer 2 interupt
+			mov   SECONDS, #00
+			mov   MINUTES, #00  ;clears timer ram lcatinos
+			mov   HOURS, #00
+			mov   SP, #7FH         ;move stack pointer out of usable ram space
+      mov   TMR2L, #LOW(-25000)
+			mov   TMR2H, #HIGH(-25000)
+			mov   TMR2RLL, #LOW(-25000)  ;sets timer 2 16-bit autoreload values
+			mov   TMR2RLH, #HIGH(-25000)
+			mov   TICKS, #5      ; sets timer's count, 5 'ticks' per second
+			setb  TR2             ;stars timer 2
+			mov   IT01CF, #0DH      ; sets external interupt to edge/level  active high/low
+			clr   IT0               
+		;	setb  IN0PL
+			orl   IE, #01H     ; added external interupt later on
+			setb  EA           ; enable global interupt
+
+			mov   60H, #REVERSE
+			mov   61H, #NEUTRAL
+			mov   62H, #ONE
+			mov   63H, #TWO
+			mov   64H, #THREE
+			mov   65H, #FOUR
+			mov   66H, #FIVE
+			mov   67H, #SIX
+			mov   68H, #SEVEN
+			mov   69H, #SEVEN
+			mov   6AH, #SEVEN
+			mov   6BH, #SEVEN       ;move 7segment data into ram locatios to inc or dec
+			mov   6CH, #SEVEN
+			mov   6DH, #NULL
+			mov   6EH, #NULL
+			mov   6FH, #NULL
+			mov   5BH, #NULL
+			mov   5CH, #NULL
+			mov   5DH, #REVERSE
+			mov   5EH, #REVERSE
+			mov   5FH, #REVERSE
+			mov   GEAR, #61H
+
+
+;*****************************************************************
+      call  Delay          ;gives time for LCD to boot up
+			call  Clearscreen    
+			clr   A
+			mov   R0, #00
+FirstScreen:           ; sets the welcome screen
+			mov   A, R0
+			mov   DPTR, #Table
+			movc  A, @A+DPTR
+			cjne  A, #'%', skipFS1   ; waits for % symbol to end string
+      jmp   skipFS2
+skipFS1:
+			mov   SBUF0, A    ; sends to serial port
+			jnb   TI0, $      ;waits 
+			clr   TI0
+			inc   R0 
+      jmp   FirstScreen
+skipFS2:      
+			
+      call  Delay5s	      ; holds intro screen for 5 seconds
+					
+      
+
+      mov  P4, #NEUTRAL       ;puts 'n' to gear 7 seg
+			call  LogIn      ; call the log in screen before main loop    
+MainLoop:                              ;|
+      call  ADCStart                   ;| main loop calls for the ADC values for temp 
+			jb    LCD_SWITCH1, ShowNames     ;| and checks if lcd toggle is high t display 
+			call  DisplayTime                ;| either run time or current driver
+			jmp   DontShowNames              ;|
+ShowNames:                             ;|
+      call  NameDisplay                ;|
+DontShowNames:                         ;|
+			;call  GearChange                ;|
+			call  Delay5s                    ;|
+			jmp   MainLoop                   ;|
+
+;*******************************************************************************************
+
+DisplayTime:
+       clr A
+			 mov R0, #00
+Time1:
+       mov A, R0
+       mov DPTR, #Table1
+			 movc A, @A+DPTR
+			 cjne A, #'%', SkipTime1   ;gets the intro table
+			 jmp  SkipTime2
+SkipTime1:
+ 			 mov   SBUF0, A
+	     jnb   TI0, $
+			 clr   TI0
+			 inc   R0 
+			 jmp   Time1
+SkipTime2:			
+       mov  A, HOURS
+			 clr  C 
+			 clr  AC          
+			 da   A
+			 swap A            ;cnverts the hex number in ram to decimal then to ascii for hours
+			 anl  A, #0FH
+			 orl  A, #30H
+			 mov SBUF0, A        
+			 jnb  TI0, $
+			 clr  TI0
+			 mov  A, HOURS
+			 clr  C
+			 clr  AC
+			 da   A
+			 anl  A, #0FH
+			 orl  A, #30H
+			 mov  SBUF0, A
+			 jnb  TI0, $
+			 clr  TI0
+			 mov  A, #'h'
+			 mov  SBUF0, A
+			 jnb  TI0, $
+			 clr  TI0
+
+
+			 mov  A, MINUTES
+			 clr  C 
+			 clr  AC
+			 da   A
+			 swap A          ;converts hex number in ram to decimal the ascii for minutes
+			 anl  A, #0FH
+			 orl  A, #30H
+			 mov SBUF0, A
+			 jnb  TI0, $
+			 clr  TI0
+			 mov  A, MINUTES
+			 clr  C 
+			 clr  AC
+			 da   A
+			 anl  A, #0FH
+			 orl  A, #30H
+			 mov SBUF0, A
+			 jnb  TI0, $
+			 clr  TI0
+			 
+			 mov  A, #'m'
+			 mov  SBUF0, A
+			 jnb  TI0, $
+			 clr  TI0
+
+			 ret
+;===============================================================================
+GearChangeISR:
+       push  ACC
+			 push  PSW
+			 mov A, R7
+			 push ACC
+			 mov A, R6
+			 push ACC              ;checks tosee which pin is low to either inc or dec the current gear
+			; push  R7
+       mov R0, GEAR
+			 jnb  UPSHIFT, ShiftUp
+			 jnb  DOWNSHIFT, ShiftDown
+			 jmp GearEnd2			  
+			; cjne @R0, #SEVEN, GearEnd
+
+			; dec R0
+			; mov A, @R0
+			; mov P4, A
+			; mov Gear, R0	 
+			 ;jmp GearEnd
+			 
+ShiftUp:
+       			  
+			 inc R0
+			 mov A, @R0
+			 mov P4, A       ;increments to the next ram location holding the next value
+			 mov GEAR, R0
+			; jnb UPSHIFT, $
+			 jmp GearEnd
+
+ShiftDown:
+       
+       dec R0
+			 mov A, @R0
+			 mov P4, A
+			 mov GEAR, R0     ;decrements to the next ram location holding the next value
+			; jnb  DOWNSHIFT, $
+GearEnd:
+       
+
+      ; jb   IE0, $
+			 mov  R6, #00H
+GearDelay:
+			 mov  R7, #00
+			 djnz R7, $      ;delays the ISR to prevent multiple shifts
+			 djnz R6, GearDelay
+			 jnb UPSHIFT, $
+			 jnb DOWNSHIFT, $     ;waits for pins to go back high before exit
+GearEnd2:
+			 pop  ACC
+			 mov  R6, A
+			 pop  ACC
+			 mov  R7, A
+       pop  PSW
+			 pop  ACC
+			 
+       reti
+
+;**********************************************************************************
+NameDisplay:
+       clr  A
+			 mov  R0, #00
+       jnb  DRIVER_1, CheckNextDriver1
+			 mov  DPTR, #Table2
+			 jmp  ShowDriver
+CheckNextDriver1:
+       jnb  Driver_2, CheckNextDriver2   ;checks to see which driver logged in to see which name to display
+			 mov  DPTR, #Table3
+			 jmp  ShowDriver
+CheckNextDriver2:
+       jnb  DRIVER_3, ErrorNextDriver
+			 mov  DPTR, #Table4
+			 jmp  ShowDriver
+ErrorNextDriver:
+       mov  DPTR, #Table5
+
+ShowDriver:
+      mov A, R0
+       
+			 movc A, @A+DPTR
+			 cjne A, #'%', SkipDrive1
+			 jmp  SkipDrive2
+SkipDrive1:
+ 			 mov   SBUF0, A
+	     jnb   TI0, $
+			 clr   TI0
+			 inc   R0 
+			 jmp   ShowDriver
+SkipDrive2:		
+       ret
+      
+			 
+       
+
+
+;*******************************************************************************
+Delay5s:
+      mov  R7, #10H		          
+WaitC1:                    
+      mov   R6, #00h       ; a 5 second delay
+WaitC0:
+      mov   R5, #00h
+      djnz  R5, $
+      djnz  R6, WaitC0
+			djnz  R7, WaitC1
+
+			ret       
+;===================================================================================
+
+
+
+RunHoursISR:
+       push ACC
+			 push PSW
+			 djnz TICKS, ExitISR     
+			 mov  TICKS, #5
+			 inc  SECONDS
+			 mov  A, SECONDS
+			 cjne A, #60, ExitISR
+			 mov  Seconds, #00
+			 inc  MINUTES
+			 mov  A, MINUTES
+			 cjne A, #60, ExitISR
+			 mov  MINUTES, #00
+			 inc  HOURS
+ExitISR:
+       pop  PSW
+       pop  ACC
+			 clr  TF2H 
+       reti
+;***************************************************************************************
+Table: 
+       db ' Group5 RaceDash', 0FEH, 45H, 40H, 'Digital3 Fall 13%'      
+Table1:
+       db    0FEH, 45H, 40H, 'Run Time: %'
+Table2:
+       db  0FEH, 45H, 40H,'Ross is Driving%'
+Table3:
+       db  0FEH, 45H, 40H, 'Leonel Driving%'
+Table4:
+       db  0FEH, 45H, 40H, 'Brandi Driving%'
+Table5:
+       db  0FEH, 45H, 40H, 'Error Driving%'
+
+			end
